@@ -23,12 +23,19 @@ class WorkspaceBounds:
 
 @dataclass(frozen=True)
 class CameraConfig:
+    """Overhead render used by env.get_rgb_image(). width/height/fov_deg are tuned
+    so the 0.5x0.3m workspace fills a comfortable fraction of the frame -- at the
+    original 320x240/60deg a 4cm cube was only ~10px tall, too small for reliable
+    open-vocabulary detection. eye/target/up/near/far are unchanged from Phase 1;
+    this is a resolution/zoom change only.
+    """
+
     eye_position: tuple[float, float, float] = (0.5, 0.0, 0.9)
     target_position: tuple[float, float, float] = (0.5, 0.0, 0.0)
     up_vector: tuple[float, float, float] = (0.0, 1.0, 0.0)
-    fov_deg: float = 60.0
-    width: int = 320
-    height: int = 240
+    fov_deg: float = 42.0
+    width: int = 640
+    height: int = 480
     near_val: float = 0.05
     far_val: float = 3.0
 

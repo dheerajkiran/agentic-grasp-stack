@@ -5,10 +5,11 @@ via a team of coordinating agents (Planner, Perception, Grounding, Execution,
 Verifier) communicating over ROS2 topics, with a closed observe → act →
 verify → replan loop — rather than one monolithic model or a scripted demo.
 
-**Status: Phase 1 of 8.** This phase has no agents, no ROS2, and no LLM calls
-yet — it's the PyBullet physics/motion foundation everything else builds on.
+**Status: Phase 2 (in progress) of 8.** Still no ROS2, agent framework, or LLM
+calls — Phase 2 is being built incrementally, slice by slice, each one
+verified before the next. No component here talks to another over ROS2 yet.
 
-## Phase 1 scope
+## Phase 1 scope (done)
 
 - PyBullet scene: table + Franka Panda arm (with gripper) + 4 labeled colored
   cubes (`red`, `green`, `blue`, `yellow`).
@@ -18,6 +19,27 @@ yet — it's the PyBullet physics/motion foundation everything else builds on.
   hardcoded target XY, using PyBullet's inverse kinematics — a smoke test that
   the arm + gripper + IK + physics pipeline works end-to-end before any
   perception/agents are added.
+
+## Phase 2, slice 1: perception (done)
+
+Replaces direct ground-truth access (`env.get_object_states()`) with an actual
+open-vocabulary vision model — Grounding DINO (`IDEA-Research/grounding-dino-tiny`
+via `transformers`) detects cubes by color name in a rendered overhead image,
+still standalone (no ROS2, no agent wrapping yet). Run it:
+
+```bash
+uv run scripts/run_perception_demo.py
+uv run scripts/run_perception_demo.py --box-threshold 0.25 --text-threshold 0.2
+uv run scripts/run_perception_demo.py --headless --output outputs/check.png
+```
+
+Saves an annotated PNG (boxes + labels + scores) to `outputs/` and prints a
+per-cube ground-truth-pixel vs. nearest-detection comparison — the visual
+check is the actual validation, per the project's requirement to confirm
+detections by eye before building anything else on top of them. Verified
+working: 4/4 cubes detected and matched within a few pixels of ground truth.
+2D box → 3D world pose conversion and ROS2 publishing are later slices, not
+part of this one.
 
 ## Quick start
 
@@ -65,15 +87,22 @@ plain `pybullet`.
 
 ```
 src/agentic_grasp_stack/
-├── config/scene_config.py   # scene/robot/camera constants
-└── sim/
-    ├── env.py     # GraspEnv: connect/reset/close, ground-truth + camera observations
-    ├── robot.py   # PandaRobot: IK-driven Cartesian motion, gripper control
-    ├── scene.py   # static plane/table loading
-    ├── objects.py # cube spawning, non-overlapping random placement, labels
-    └── motion.py  # Phase-1-only scripted pick-place state machine
-scripts/run_pick_place_demo.py   # CLI verification entrypoint
-tests/test_env_smoke.py          # headless regression guard
+├── config/
+│   ├── scene_config.py        # scene/robot/camera constants
+│   └── perception_config.py   # Grounding DINO model id + detection thresholds
+├── sim/
+│   ├── env.py     # GraspEnv: connect/reset/close, ground-truth + camera observations
+│   ├── robot.py   # PandaRobot: IK-driven Cartesian motion, gripper control
+│   ├── scene.py   # static plane/table loading
+│   ├── objects.py # cube spawning, non-overlapping random placement, labels
+│   └── motion.py  # Phase-1-only scripted pick-place state machine
+└── perception/
+    ├── detector.py    # Grounding DINO prompt-building + inference
+    └── visualize.py   # box drawing, ground-truth world->pixel projection
+scripts/
+├── run_pick_place_demo.py    # Phase 1 CLI verification entrypoint
+└── run_perception_demo.py    # Phase 2 slice 1 CLI verification entrypoint
+tests/test_env_smoke.py       # headless regression guard (Phase 1 only)
 ```
 
 `env.py` and `robot.py` are the reusable core: a future ROS2 node wraps
