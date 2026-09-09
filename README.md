@@ -38,8 +38,24 @@ per-cube ground-truth-pixel vs. nearest-detection comparison — the visual
 check is the actual validation, per the project's requirement to confirm
 detections by eye before building anything else on top of them. Verified
 working: 4/4 cubes detected and matched within a few pixels of ground truth.
-2D box → 3D world pose conversion and ROS2 publishing are later slices, not
-part of this one.
+
+## Phase 2, slice 2: 2D → 3D pose estimation (done)
+
+Adds the missing inverse step: given a detected pixel, estimate the object's
+3D world position (`perception/geometry.py`'s `pixel_to_world()`, the inverse
+of `world_to_pixel()`) by intersecting the camera ray with the known table
+plane — valid because every object here is a cube of known height on a table
+of known height, not general monocular depth estimation. `run_perception_demo.py`
+now prints estimated vs. ground-truth position and XY error per cube. Verified
+working: 4/4 cubes, XY error 0.6–2.6mm (mean 1.7mm), well within tolerance for
+a 4cm cube. Finding this out surfaced a real Phase 1 bug — the table's
+AABB-reported surface height didn't match where physics actually resolved
+contact (~13.6mm off), so cubes spawned slightly embedded in the table;
+`GraspEnv.connect()` now self-calibrates the true surface height from a
+settled cube's actual resting position instead of trusting the raw AABB.
+
+ROS2 publishing (wrapping this as an actual Perception *agent* node) is the
+next and last Phase 2 slice, not part of this one.
 
 ## Quick start
 
@@ -98,11 +114,14 @@ src/agentic_grasp_stack/
 │   └── motion.py  # Phase-1-only scripted pick-place state machine
 └── perception/
     ├── detector.py    # Grounding DINO prompt-building + inference
-    └── visualize.py   # box drawing, ground-truth world->pixel projection
+    ├── geometry.py    # world<->pixel camera projection (both directions)
+    └── visualize.py   # box drawing
 scripts/
 ├── run_pick_place_demo.py    # Phase 1 CLI verification entrypoint
-└── run_perception_demo.py    # Phase 2 slice 1 CLI verification entrypoint
-tests/test_env_smoke.py       # headless regression guard (Phase 1 only)
+└── run_perception_demo.py    # Phase 2 CLI verification entrypoint (detection + pose)
+tests/
+├── test_env_smoke.py            # Phase 1 headless regression guard
+└── test_perception_geometry.py  # Phase 2 camera-geometry round-trip test
 ```
 
 `env.py` and `robot.py` are the reusable core: a future ROS2 node wraps

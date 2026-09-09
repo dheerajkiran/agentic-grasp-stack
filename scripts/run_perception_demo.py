@@ -16,9 +16,10 @@ import sys
 from pathlib import Path
 
 from agentic_grasp_stack.config.perception_config import DEFAULT_OUTPUT_PATH, PERCEPTION_CONFIG
-from agentic_grasp_stack.config.scene_config import CAMERA_CONFIG
+from agentic_grasp_stack.config.scene_config import CAMERA_CONFIG, CUBE_HALF_EXTENT
 from agentic_grasp_stack.perception.detector import build_prompt, detect
-from agentic_grasp_stack.perception.visualize import draw_detections, world_to_pixel
+from agentic_grasp_stack.perception.geometry import pixel_to_world, world_to_pixel
+from agentic_grasp_stack.perception.visualize import draw_detections
 from agentic_grasp_stack.sim.env import GraspEnv
 
 MATCH_PIXEL_RADIUS = 80
@@ -78,6 +79,7 @@ def main() -> int:
         annotated.save(output_path)
 
         matched_count = 0
+        xy_errors = []
         print("\nGround truth vs. nearest detection:")
         for name, state in object_states.items():
             gt_pixel = world_to_pixel(state["position"], CAMERA_CONFIG)
@@ -87,16 +89,33 @@ def main() -> int:
                 label = detections["labels"][index]
                 score = detections["scores"][index]
                 matched_count += 1
+
+                target_height = env.surface_z + CUBE_HALF_EXTENT
+                det_center = box_center(detections["boxes"][index])
+                est_xyz = pixel_to_world(det_center, CAMERA_CONFIG, target_height)
+                gt_x, gt_y, gt_z = state["position"]
+                xy_error = math.hypot(est_xyz[0] - gt_x, est_xyz[1] - gt_y)
+                xy_errors.append(xy_error)
+
                 print(
                     f"  {name}: ground-truth pixel ~{gt_pixel} -> matched '{label}' "
-                    f"({score:.2f}) at {distance:.0f}px away"
+                    f"({score:.2f}) at {distance:.0f}px away | "
+                    f"est. pos ({est_xyz[0]:.3f}, {est_xyz[1]:.3f}, {est_xyz[2]:.3f}) "
+                    f"vs gt ({gt_x:.3f}, {gt_y:.3f}, {gt_z:.3f}) -> XY error {xy_error * 1000:.1f}mm"
                 )
             else:
                 print(f"  {name}: ground-truth pixel ~{gt_pixel} -> no detection matched")
 
+        if xy_errors:
+            mean_err_mm = 1000 * sum(xy_errors) / len(xy_errors)
+            max_err_mm = 1000 * max(xy_errors)
+            error_summary = f", XY pose error mean={mean_err_mm:.1f}mm max={max_err_mm:.1f}mm"
+        else:
+            error_summary = ""
+
         print(
-            f"\nPERCEPTION CHECK COMPLETE: {matched_count}/{len(object_states)} cubes detected, "
-            f"image saved to {output_path.resolve()} -- inspect visually."
+            f"\nPERCEPTION CHECK COMPLETE: {matched_count}/{len(object_states)} cubes detected"
+            f"{error_summary}, image saved to {output_path.resolve()} -- inspect visually."
         )
     finally:
         env.close()

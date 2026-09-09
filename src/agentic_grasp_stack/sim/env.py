@@ -12,6 +12,7 @@ import pybullet_data
 from agentic_grasp_stack.config.scene_config import (
     CAMERA_CONFIG,
     CANONICAL_OBJECT_POSITIONS,
+    CUBE_HALF_EXTENT,
     CameraConfig,
     OBJECT_COLORS,
 )
@@ -20,6 +21,7 @@ from agentic_grasp_stack.sim.objects import CubeSet, sample_free_positions
 from agentic_grasp_stack.sim.robot import PandaRobot
 
 SETTLE_STEPS = 10
+CALIBRATION_SETTLE_STEPS = 120
 
 
 class GraspEnv:
@@ -42,6 +44,20 @@ class GraspEnv:
         self.robot.load()
         self.cubes = CubeSet(self.surface_z)
         self.cubes.spawn()
+
+        # scene.load_table()'s AABB-based surface_z doesn't always match where
+        # PyBullet's physics actually resolves contact (measured ~13.6mm off on
+        # this table URDF) -- cubes spawned at the AABB estimate start slightly
+        # embedded in the table and get pushed out during settling. Correct
+        # surface_z from where a cube actually comes to rest, once, here, then
+        # re-place all cubes cleanly at the corrected height.
+        for _ in range(CALIBRATION_SETTLE_STEPS):
+            p.stepSimulation()
+        probe_name = next(iter(self.cubes.body_ids))
+        (_, _, settled_z), _ = self.cubes.get_pose(probe_name)
+        self.surface_z = settled_z - CUBE_HALF_EXTENT
+        self.cubes.surface_z = self.surface_z
+        self.cubes.reposition(CANONICAL_OBJECT_POSITIONS)
 
         if self.gui:
             p.resetDebugVisualizerCamera(
