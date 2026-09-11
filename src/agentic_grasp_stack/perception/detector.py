@@ -19,6 +19,44 @@ from agentic_grasp_stack.config.perception_config import GROUNDING_DINO_MODEL_ID
 _processor = None
 _model = None
 
+NMS_IOU_THRESHOLD = 0.5
+
+
+def _box_iou(box_a: list[float], box_b: list[float]) -> float:
+    ax0, ay0, ax1, ay1 = box_a
+    bx0, by0, bx1, by1 = box_b
+
+    inter_x0, inter_y0 = max(ax0, bx0), max(ay0, by0)
+    inter_x1, inter_y1 = min(ax1, bx1), min(ay1, by1)
+    inter_area = max(0.0, inter_x1 - inter_x0) * max(0.0, inter_y1 - inter_y0)
+    if inter_area == 0.0:
+        return 0.0
+
+    area_a = (ax1 - ax0) * (ay1 - ay0)
+    area_b = (bx1 - bx0) * (by1 - by0)
+    union_area = area_a + area_b - inter_area
+    return inter_area / union_area if union_area > 0 else 0.0
+
+
+def _non_max_suppression(
+    boxes: list[list[float]],
+    scores: list[float],
+    labels: list[str],
+    iou_threshold: float = NMS_IOU_THRESHOLD,
+) -> tuple[list[list[float]], list[float], list[str]]:
+    """Collapse overlapping duplicate detections (same object, multiple
+    decoder queries) to the single highest-scoring box per cluster. Grounding
+    DINO's own post-processing only filters by score, it doesn't suppress
+    overlapping boxes -- that's the caller's job, and without it the agent's
+    output can contain near-duplicate/garbled-label detections of the same
+    physical object (observed in practice, not hypothetical)."""
+    order = sorted(range(len(boxes)), key=lambda i: scores[i], reverse=True)
+    keep: list[int] = []
+    for i in order:
+        if all(_box_iou(boxes[i], boxes[j]) < iou_threshold for j in keep):
+            keep.append(i)
+    return [boxes[i] for i in keep], [scores[i] for i in keep], [labels[i] for i in keep]
+
 
 def _get_processor_and_model():
     global _processor, _model
@@ -61,10 +99,15 @@ def detect(
         target_sizes=[(pil_image.height, pil_image.width)],
     )[0]
 
+    boxes = [[float(v) for v in box] for box in results["boxes"]]
+    scores = [float(s) for s in results["scores"]]
+    labels = list(results["text_labels"])
+    boxes, scores, labels = _non_max_suppression(boxes, scores, labels)
+
     return {
-        "scores": [float(s) for s in results["scores"]],
-        "boxes": [[float(v) for v in box] for box in results["boxes"]],
-        "labels": list(results["text_labels"]),
+        "scores": scores,
+        "boxes": boxes,
+        "labels": labels,
         "device": str(model.device),
         "seconds": elapsed,
     }

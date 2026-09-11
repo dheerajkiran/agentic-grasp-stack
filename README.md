@@ -5,9 +5,10 @@ via a team of coordinating agents (Planner, Perception, Grounding, Execution,
 Verifier) communicating over ROS2 topics, with a closed observe → act →
 verify → replan loop — rather than one monolithic model or a scripted demo.
 
-**Status: Phase 2 (in progress) of 8.** Still no ROS2, agent framework, or LLM
-calls — Phase 2 is being built incrementally, slice by slice, each one
-verified before the next. No component here talks to another over ROS2 yet.
+**Status: Phase 2 done, 3 slices, of 8.** Built incrementally, each slice
+verified before the next. ROS2 now exists for real (see slice 3 below), but
+only inside a UTM VM — no rclpy on the macOS dev machine, by design (see
+Mac ↔ VM architecture note in slice 3).
 
 ## Phase 1 scope (done)
 
@@ -54,8 +55,77 @@ contact (~13.6mm off), so cubes spawned slightly embedded in the table;
 `GraspEnv.connect()` now self-calibrates the true surface height from a
 settled cube's actual resting position instead of trusting the raw AABB.
 
-ROS2 publishing (wrapping this as an actual Perception *agent* node) is the
-next and last Phase 2 slice, not part of this one.
+While building slice 3, also found and fixed a second real bug: Grounding
+DINO's post-processing filters by score but doesn't suppress overlapping
+duplicate boxes — 2 of the "detections" earlier were near-duplicate/garbled-
+label boxes sitting on top of real cubes (invisible in slice 1/2's output
+since ground-truth matching implicitly picked one best box per object).
+`detector.py`'s `detect()` now applies IoU-based non-max suppression, so raw
+detections match real object count (verified: 6 → 4 on the canonical scene).
+
+## Phase 2, slice 3: perception agent + ROS2 publishing (done)
+
+Closes out Phase 2: a real agent entrypoint with **no ground-truth
+involvement** (contrast with slices 1-2's demo script, which deliberately
+uses ground truth to validate accuracy), plus an actual ROS2 topic on the
+other end.
+
+**Architecture:** the Mac has no CUDA and — by design — no ROS2 either; ROS2
+lives only in a UTM VM. So this splits in two:
+- **Mac side** (`scripts/run_perception_agent.py`, `perception/agent.py`):
+  runs the same render → detect → estimate-pose pipeline as before, but reads
+  nothing from `env.get_object_states()` — `run_perception_cycle()` builds its
+  result purely from the detector + geometry, and writes it to
+  `outputs/latest_detections.json`. Built and tested here like every other
+  slice: `uv run scripts/run_perception_agent.py`, verified writing correct,
+  clean (post-NMS) JSON.
+- **VM side** (`ros2_ws/src/agentic_grasp_stack_perception/`): a minimal
+  `ament_python` ROS2 package — `detection_publisher` node watches the JSON
+  file (mtime-based change detection) and republishes it verbatim as a
+  `std_msgs/String` on `/perception/detections` (QoS: RELIABLE +
+  TRANSIENT_LOCAL, so a late subscriber still gets the last known detections
+  immediately). JSON-as-string rather than a custom `.msg` type deliberately,
+  to avoid a second `rosidl` interfaces package this slice — noted as
+  deferred polish, not forgotten.
+
+**Important caveat:** the VM-side package is written from rclpy/Humble API
+knowledge only — **no ROS2 environment exists on the Mac this was built on**,
+so it could not be run, built, or even import-checked here (only
+syntax-checked with `py_compile`). First real test happens in your VM. If
+something doesn't work there, that's expected-possible, not a sign something
+else is wrong — treat it as the first real test it is.
+
+**VM runbook** (replace `<vm-user>`/`<VM_IP>` with yours; assumes ROS2
+Humble and a copy of this repo at `~/Agentic-grasp-stack` on the VM):
+
+```bash
+# one-time, on the VM:
+mkdir -p ~/ros2_ws/src ~/Agentic-grasp-stack/outputs
+
+# from the Mac, copy the package over:
+scp -r ros2_ws/src/agentic_grasp_stack_perception <vm-user>@<VM_IP>:~/ros2_ws/src/
+
+# each time you produce fresh detections on the Mac:
+uv run scripts/run_perception_agent.py
+scp outputs/latest_detections.json <vm-user>@<VM_IP>:~/Agentic-grasp-stack/outputs/latest_detections.json
+
+# on the VM, build once (and again after any package edits):
+source /opt/ros/humble/setup.bash
+cd ~/ros2_ws && colcon build --packages-select agentic_grasp_stack_perception
+source install/setup.bash
+
+# on the VM, run it:
+ros2 run agentic_grasp_stack_perception detection_publisher
+
+# in a second VM terminal (source install/setup.bash there too):
+ros2 topic echo /perception/detections
+ros2 topic hz /perception/detections
+```
+
+Expect the node to log `watching ... publishing to /perception/detections` on
+startup, then `published N detections (file changed)` each time a fresh JSON
+file lands — and `ros2 topic echo` should show the last message immediately
+even if you start it after the last publish, thanks to TRANSIENT_LOCAL.
 
 ## Quick start
 
@@ -113,19 +183,25 @@ src/agentic_grasp_stack/
 │   ├── objects.py # cube spawning, non-overlapping random placement, labels
 │   └── motion.py  # Phase-1-only scripted pick-place state machine
 └── perception/
-    ├── detector.py    # Grounding DINO prompt-building + inference
+    ├── detector.py    # Grounding DINO prompt-building + inference + NMS
     ├── geometry.py    # world<->pixel camera projection (both directions)
-    └── visualize.py   # box drawing
+    ├── visualize.py   # box drawing
+    └── agent.py       # ground-truth-free detect+pose cycle, JSON hand-off writer
 scripts/
-├── run_pick_place_demo.py    # Phase 1 CLI verification entrypoint
-└── run_perception_demo.py    # Phase 2 CLI verification entrypoint (detection + pose)
+├── run_pick_place_demo.py     # Phase 1 CLI verification entrypoint
+├── run_perception_demo.py     # Phase 2 CLI: detection+pose vs. ground truth (validation)
+└── run_perception_agent.py    # Phase 2 CLI: the real agent, writes JSON, no ground truth
 tests/
 ├── test_env_smoke.py            # Phase 1 headless regression guard
-└── test_perception_geometry.py  # Phase 2 camera-geometry round-trip test
+├── test_perception_geometry.py  # Phase 2 camera-geometry round-trip test
+└── test_perception_agent.py     # Phase 2 agent output schema test
+ros2_ws/src/agentic_grasp_stack_perception/   # ROS2 package -- runs in the VM, not the Mac
+├── package.xml, setup.py, setup.cfg, resource/...
+└── agentic_grasp_stack_perception/detection_publisher_node.py
 ```
 
 `env.py` and `robot.py` are the reusable core: a future ROS2 node wraps
 `GraspEnv` unchanged, and a future Execution agent calls
 `robot.move_to_pose()` / `robot.set_gripper()` directly instead of the
-hardcoded state machine in `motion.py`. No ROS2, agent, or LLM code exists
-yet — those land in later phases as sibling packages.
+hardcoded state machine in `motion.py`. No agent-framework or LLM code exists
+yet — those land in later phases.

@@ -1,0 +1,26 @@
+<?xml version="1.0"?>
+<?xml-stylesheet type="text/xsl" href="http://download.ros.org/schema/package_format3.xsd"?>
+<package format="3">
+  <name>agentic_grasp_stack_perception</name>
+  <version>0.1.0</version>
+  <description>
+    Publishes Grounding DINO perception detections (produced on a separate
+    macOS host and handed off as a JSON file) onto a ROS2 topic inside this
+    VM. Bridges the Mac-side perception agent to ROS2 for later Grounding/
+    Execution agents to consume.
+  </description>
+  <maintainer email="denna@asu.edu">Dheeraj Kiran</maintainer>
+  <license>MIT</license>
+
+  <depend>rclpy</depend>
+  <depend>std_msgs</depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
