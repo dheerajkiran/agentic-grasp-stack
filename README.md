@@ -5,10 +5,10 @@ via a team of coordinating agents (Planner, Perception, Grounding, Execution,
 Verifier) communicating over ROS2 topics, with a closed observe → act →
 verify → replan loop — rather than one monolithic model or a scripted demo.
 
-**Status: Phase 2 done, 3 slices, of 8.** Built incrementally, each slice
-verified before the next. ROS2 now exists for real (see slice 3 below), but
-only inside a UTM VM — no rclpy on the macOS dev machine, by design (see
-Mac ↔ VM architecture note in slice 3).
+**Status: Phase 3 (in progress) of 8.** Phase 2 (3 slices) done. Built
+incrementally, each slice verified before the next. ROS2 exists for real (see
+Phase 2 slice 3), but only inside a UTM VM — no rclpy on the macOS dev
+machine, by design.
 
 ## Phase 1 scope (done)
 
@@ -127,6 +127,35 @@ startup, then `published N detections (file changed)` each time a fresh JSON
 file lands — and `ros2 topic echo` should show the last message immediately
 even if you start it after the last publish, thanks to TRANSIENT_LOCAL.
 
+## Phase 3: Grounding agent (in progress)
+
+Resolves a free-form referring expression ("the red block", "the block
+closest to the robot") to one specific detection from
+`outputs/latest_detections.json`, via a structured Claude API call
+(`client.messages.parse(..., output_format=GroundingResult)` — a Pydantic
+model with `matched_index`, `matched_label`, `reasoning`, `confidence`), not
+CLIP — chosen so it can handle spatial/relational phrases, not just
+color/shape matching, and because the brief already earmarks Claude API
+budget for this agent. Uses `claude-opus-5`.
+
+```bash
+uv run scripts/run_grounding_agent.py --expression "the red block"
+uv run scripts/run_grounding_agent.py --expression "the block closest to the robot" \
+    --json-input outputs/latest_detections.json
+```
+
+**Requires `ANTHROPIC_API_KEY`** (or an `ant auth login` profile) — this
+makes a real, billed API call. Without it the script fails with a clear
+`Could not resolve authentication method` error (confirmed — the request
+itself builds and sends correctly, it only fails at the auth step).
+
+**Verification split, same shape as Phase 2 slice 3:** the parsing/validation
+logic (`tests/test_grounding_agent.py`) is built and tested with a mocked
+Claude client — zero network, zero cost, verified passing. The actual live
+API call has **not** been confirmed to produce a correct result — that needs
+an API key, which doesn't exist on this dev machine. Not done until run for
+real and checked.
+
 ## Quick start
 
 Requires [`uv`](https://docs.astral.sh/uv/) (`brew install uv`).
@@ -175,26 +204,31 @@ plain `pybullet`.
 src/agentic_grasp_stack/
 ├── config/
 │   ├── scene_config.py        # scene/robot/camera constants
-│   └── perception_config.py   # Grounding DINO model id + detection thresholds
+│   ├── perception_config.py   # Grounding DINO model id + detection thresholds
+│   └── grounding_config.py    # Claude model id + max_tokens for the Grounding agent
 ├── sim/
 │   ├── env.py     # GraspEnv: connect/reset/close, ground-truth + camera observations
 │   ├── robot.py   # PandaRobot: IK-driven Cartesian motion, gripper control
 │   ├── scene.py   # static plane/table loading
 │   ├── objects.py # cube spawning, non-overlapping random placement, labels
 │   └── motion.py  # Phase-1-only scripted pick-place state machine
-└── perception/
-    ├── detector.py    # Grounding DINO prompt-building + inference + NMS
-    ├── geometry.py    # world<->pixel camera projection (both directions)
-    ├── visualize.py   # box drawing
-    └── agent.py       # ground-truth-free detect+pose cycle, JSON hand-off writer
+├── perception/
+│   ├── detector.py    # Grounding DINO prompt-building + inference + NMS
+│   ├── geometry.py    # world<->pixel camera projection (both directions)
+│   ├── visualize.py   # box drawing
+│   └── agent.py       # ground-truth-free detect+pose cycle, JSON hand-off writer
+└── grounding/
+    └── agent.py    # resolve_reference(): structured Claude call -> matched detection
 scripts/
 ├── run_pick_place_demo.py     # Phase 1 CLI verification entrypoint
 ├── run_perception_demo.py     # Phase 2 CLI: detection+pose vs. ground truth (validation)
-└── run_perception_agent.py    # Phase 2 CLI: the real agent, writes JSON, no ground truth
+├── run_perception_agent.py    # Phase 2 CLI: the real agent, writes JSON, no ground truth
+└── run_grounding_agent.py     # Phase 3 CLI: resolve an expression against that JSON
 tests/
 ├── test_env_smoke.py            # Phase 1 headless regression guard
 ├── test_perception_geometry.py  # Phase 2 camera-geometry round-trip test
-└── test_perception_agent.py     # Phase 2 agent output schema test
+├── test_perception_agent.py     # Phase 2 agent output schema test
+└── test_grounding_agent.py      # Phase 3 parsing/validation test (mocked Claude client)
 ros2_ws/src/agentic_grasp_stack_perception/   # ROS2 package -- runs in the VM, not the Mac
 ├── package.xml, setup.py, setup.cfg, resource/...
 └── agentic_grasp_stack_perception/detection_publisher_node.py
@@ -203,5 +237,6 @@ ros2_ws/src/agentic_grasp_stack_perception/   # ROS2 package -- runs in the VM, 
 `env.py` and `robot.py` are the reusable core: a future ROS2 node wraps
 `GraspEnv` unchanged, and a future Execution agent calls
 `robot.move_to_pose()` / `robot.set_gripper()` directly instead of the
-hardcoded state machine in `motion.py`. No agent-framework or LLM code exists
-yet — those land in later phases.
+hardcoded state machine in `motion.py`. The Planner agent (Phase 5) will
+reuse `grounding/agent.py`'s Claude-calling pattern (lazy client singleton +
+`messages.parse` structured output).

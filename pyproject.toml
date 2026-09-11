@@ -10,6 +10,8 @@ dependencies = [
     "transformers>=5.16.1",
     "pillow>=12.3.0",
     "accelerate>=1.14.0",
+    "anthropic>=1.5.0",
+    "pydantic>=2.13.5",
 ]
 
 [project.optional-dependencies]
